@@ -1,0 +1,469 @@
+-- Muscle Legends Hack - INSTANT ANTI-PLAYER (120 STUDS) + AUTO PUNCH
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+-- Ждем загрузки PlayerGui
+if not player:FindFirstChild("PlayerGui") then
+    player:WaitForChild("PlayerGui")
+end
+
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+screenGui.Name = "MuscleHackUI"
+screenGui.ResetOnSpawn = false
+
+-- ГЛАВНЫЕ ПЕРЕМЕННЫЕ
+local autoTrain = false
+local autoRebirth = false
+local lockPosition = false
+local autoPunch = false
+local targetPosition = nil
+local targetCFrame = nil -- НОВАЯ ПЕРЕМЕННАЯ: фиксируем поворот
+local lastEquipTime = 0
+local lastTrainTime = 0
+local lastRebirthTime = 0
+local lastPunchTime = 0
+local currentSafePosition = nil
+
+-- Безопасные координаты для телепортации при обнаружении игроков
+local safePositions = {
+    Vector3.new(-8946.5, 82.8, -6034.3),
+    Vector3.new(-8978.4, 17.2, -5652.7),
+    Vector3.new(-8990.9, 17.2, -5977.5),
+    Vector3.new(-8558.4, 17.2, -5805.7)
+}
+
+-- Координаты для телепортации при перерождении
+local rebirthPosition = Vector3.new(-8748.6, 124.4, -5860.8)
+
+-- Главная кнопка
+local mainBtn = Instance.new("TextButton", screenGui)
+mainBtn.Size = UDim2.new(0, 50, 0, 50)
+mainBtn.Position = UDim2.new(0, 10, 0, 10)
+mainBtn.Text = "💬"
+mainBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+mainBtn.TextSize = 24
+mainBtn.ZIndex = 10
+
+-- Контейнер для меню
+local menuFrame = Instance.new("Frame", screenGui)
+menuFrame.Size = UDim2.new(0, 250, 0, 190)
+menuFrame.Position = UDim2.new(0, 10, 0, 10)
+menuFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+menuFrame.BorderSizePixel = 2
+menuFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
+menuFrame.Visible = false
+menuFrame.ZIndex = 5
+
+-- ПОИСК rebirthRemote
+function findRebirthRemote()
+    local rebirthRemote = ReplicatedStorage:FindFirstChild("rEvents") and ReplicatedStorage.rEvents:FindFirstChild("rebirthRemote")
+    if rebirthRemote then
+        return rebirthRemote
+    end
+    return nil
+end
+
+-- АВТО-ЭКИПИРОВКА КУЛАКОВ
+function autoEquipPunch()
+    if not autoPunch then return end
+    if tick() - lastEquipTime < 3 then return end
+    
+    if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+        local hasPunch = false
+        for _, tool in pairs(player.Character:GetChildren()) do
+            if tool:IsA("Tool") and string.find(string.lower(tool.Name), "punch") then
+                hasPunch = true
+                break
+            end
+        end
+        
+        if not hasPunch then
+            local backpack = player:FindFirstChild("Backpack")
+            if backpack then
+                for _, tool in pairs(backpack:GetChildren()) do
+                    if tool:IsA("Tool") and string.find(string.lower(tool.Name), "punch") then
+                        if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+                            tool.Parent = player.Character
+                            lastEquipTime = tick()
+                            print("🥊 Авто-экипировка кулаков: " .. tool.Name)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- АВТО-БИТЬЕ КУЛАКАМИ
+function autoPunchFunction()
+    if not autoPunch then return end
+    if tick() - lastPunchTime < 0.05 then return end
+    
+    pcall(function()
+        -- Сначала убедимся что кулаки экипированы
+        if player.Character and not player.Character:FindFirstChildOfClass("Tool") then
+            autoEquipPunch()
+            return
+        end
+        
+        -- Пробуем основные RemoteEvents для удара
+        local mainRemotes = {
+            ReplicatedStorage:FindFirstChild("Click"),
+            ReplicatedStorage:FindFirstChild("Train"), 
+            ReplicatedStorage:FindFirstChild("Exercise"),
+            ReplicatedStorage:FindFirstChild("Punch")
+        }
+        
+        for _, remote in pairs(mainRemotes) do
+            if remote and remote:IsA("RemoteEvent") then
+                remote:FireServer()
+                break
+            end
+        end
+        
+        -- Пробуем rEvents
+        local rEvents = ReplicatedStorage:FindFirstChild("rEvents")
+        if rEvents then
+            for _, remote in pairs(rEvents:GetChildren()) do
+                if remote:IsA("RemoteEvent") and (string.find(string.lower(remote.Name), "click") or
+                                                string.find(string.lower(remote.Name), "train") or
+                                                string.find(string.lower(remote.Name), "exercise") or
+                                                string.find(string.lower(remote.Name), "punch")) then
+                    remote:FireServer()
+                end
+            end
+        end
+        
+        -- Активируем инструмент
+        if player.Character then
+            local tool = player.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function()
+                    tool:Activate()
+                end)
+            end
+        end
+        
+        lastPunchTime = tick()
+    end)
+end
+
+-- МОМЕНТАЛЬНАЯ ПРОВЕРКА ИГРОКОВ В РАДИУСЕ 120 STUDS
+function checkNearbyPlayers()
+    if not autoRebirth then return false end
+    
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    local myPosition = player.Character.HumanoidRootPart.Position
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local otherPosition = otherPlayer.Character.HumanoidRootPart.Position
+            local distance = (myPosition - otherPosition).Magnitude
+            
+            if distance <= 120 then
+                print("🚨 МГНОВЕННО обнаружен игрок в радиусе 120 studs: " .. otherPlayer.Name .. " (расстояние: " .. math.floor(distance) .. ")")
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+-- МГНОВЕННАЯ ТЕЛЕПОРТАЦИЯ ПРИ ОБНАРУЖЕНИИ ИГРОКА
+function instantAntiPlayerCheck()
+    if not autoRebirth then return end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    if checkNearbyPlayers() then
+        teleportToRandomSafePosition()
+    end
+end
+
+-- ТЕЛЕПОРТАЦИЯ НА СЛУЧАЙНУЮ БЕЗОПАСНУЮ ПОЗИЦИЮ
+function teleportToRandomSafePosition()
+    if not autoRebirth then return end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local randomIndex = math.random(1, #safePositions)
+    local safePosition = safePositions[randomIndex]
+    
+    currentSafePosition = safePosition
+    player.Character.HumanoidRootPart.CFrame = CFrame.new(safePosition)
+    print("🛡️ МГНОВЕННО телепортирован на безопасную позицию " .. randomIndex)
+end
+
+-- ВЫЗОВ ПЕРЕРОЖДЕНИЯ
+function callRebirth()
+    if not autoRebirth then return end
+    if tick() - lastRebirthTime < 0.5 then return end
+    
+    local rebirthRemote = findRebirthRemote()
+    if rebirthRemote then
+        pcall(function()
+            if rebirthRemote:IsA("RemoteFunction") then
+                rebirthRemote:InvokeServer("rebirthRequest")
+            elseif rebirthRemote:IsA("RemoteEvent") then
+                rebirthRemote:FireServer("rebirthRequest")
+            end
+            print("🔄 Перерождение вызвано")
+            lastRebirthTime = tick()
+        end)
+    else
+        print("❌ Rebirth remote не найден!")
+    end
+end
+
+-- ТЕЛЕПОРТАЦИЯ НА КООРДИНАТЫ ПЕРЕРОЖДЕНИЯ
+function teleportToRebirthPosition()
+    if not autoRebirth then return end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    if currentSafePosition then
+        local currentPos = player.Character.HumanoidRootPart.Position
+        local distanceToSafe = (currentPos - currentSafePosition).Magnitude
+        
+        if distanceToSafe <= 10 then
+            print("📍 Остаюсь на безопасной позиции")
+            return
+        end
+    end
+    
+    player.Character.HumanoidRootPart.CFrame = CFrame.new(rebirthPosition)
+    currentSafePosition = nil
+    print("📍 Телепортирован на позицию перерождения")
+end
+
+-- АВТО-ЭКИПИРОВКА ГАНТЕЛЕЙ
+function autoEquipDumbbell()
+    if not autoTrain and not autoRebirth then return end
+    if tick() - lastEquipTime < 3 then return end
+    
+    if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+        local hasTool = false
+        for _, tool in pairs(player.Character:GetChildren()) do
+            if tool:IsA("Tool") and (string.find(string.lower(tool.Name), "dumb") or 
+                                     string.find(string.lower(tool.Name), "barbell") or
+                                     string.find(string.lower(tool.Name), "weight")) then
+                hasTool = true
+                break
+            end
+        end
+        
+        if not hasTool then
+            local backpack = player:FindFirstChild("Backpack")
+            if backpack then
+                for _, tool in pairs(backpack:GetChildren()) do
+                    if tool:IsA("Tool") and (string.find(string.lower(tool.Name), "dumb") or 
+                                             string.find(string.lower(tool.Name), "barbell") or
+                                             string.find(string.lower(tool.Name), "weight")) then
+                        if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+                            tool.Parent = player.Character
+                            lastEquipTime = tick()
+                            print("💪 Авто-экипировка гантели: " .. tool.Name)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- АВТО-ТРЕНИРОВКА
+function autoTrainFunction()
+    if not autoTrain and not autoRebirth then return end
+    if tick() - lastTrainTime < 0.05 then return end
+    
+    pcall(function()
+        if player.Character and not player.Character:FindFirstChildOfClass("Tool") then
+            autoEquipDumbbell()
+            return
+        end
+        
+        local mainRemotes = {
+            ReplicatedStorage:FindFirstChild("Click"),
+            ReplicatedStorage:FindFirstChild("Train"), 
+            ReplicatedStorage:FindFirstChild("Exercise")
+        }
+        
+        for _, remote in pairs(mainRemotes) do
+            if remote and remote:IsA("RemoteEvent") then
+                remote:FireServer()
+                break
+            end
+        end
+        
+        local rEvents = ReplicatedStorage:FindFirstChild("rEvents")
+        if rEvents then
+            for _, remote in pairs(rEvents:GetChildren()) do
+                if remote:IsA("RemoteEvent") and (string.find(string.lower(remote.Name), "click") or
+                                                string.find(string.lower(remote.Name), "train") or
+                                                string.find(string.lower(remote.Name), "exercise")) then
+                    remote:FireServer()
+                end
+            end
+        end
+        
+        if player.Character then
+            local tool = player.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function()
+                    tool:Activate()
+                end)
+            end
+        end
+        
+        lastTrainTime = tick()
+    end)
+end
+
+-- LOCK POSITION (УЛУЧШЕННАЯ - ФИКСАЦИЯ ПОЗИЦИИ И ПОВОРОТА)
+function lockPlayerPosition()
+    if not lockPosition then return end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local currentCFrame = player.Character.HumanoidRootPart.CFrame
+    local currentPos = currentCFrame.Position
+    
+    -- Проверяем расстояние до целевой позиции
+    local distance = (currentPos - targetPosition).Magnitude
+    
+    -- Проверяем разницу в повороте (используем LookVector для направления)
+    local currentLook = currentCFrame.LookVector
+    local targetLook = targetCFrame.LookVector
+    local dotProduct = currentLook:Dot(targetLook)
+    
+    -- Если сдвинулись больше чем на 0.5 studs ИЛИ повернулись больше чем на 15 градусов
+    if distance > 0.5 or dotProduct < 0.9659 then -- 0.9659 ≈ cos(15°)
+        -- Возвращаем на исходную позицию и поворот
+        player.Character.HumanoidRootPart.CFrame = targetCFrame
+    end
+end
+
+-- КНОПКИ МЕНЮ
+local function createMenuButton(text, yPos, variableType)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.8, 0, 0, 35)
+    btn.Position = UDim2.new(0.1, 0, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 16
+    btn.BorderSizePixel = 1
+    btn.BorderColor3 = Color3.fromRGB(100, 100, 100)
+    btn.ZIndex = 6
+    btn.Parent = menuFrame
+    
+    local function updateButton()
+        if variableType == "train" then
+            btn.Text = autoTrain and "💪 TRAIN: ON" or "💪 TRAIN: OFF"
+            btn.BackgroundColor3 = autoTrain and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 60)
+        elseif variableType == "lock" then
+            btn.Text = lockPosition and "🔒 LOCK: ON" or "🔒 LOCK: OFF"
+            btn.BackgroundColor3 = lockPosition and Color3.fromRGB(150, 100, 0) or Color3.fromRGB(60, 60, 60)
+        elseif variableType == "rebirth" then
+            btn.Text = autoRebirth and "🔄 REBIRTH: ON" or "🔄 REBIRTH: OFF"
+            btn.BackgroundColor3 = autoRebirth and Color3.fromRGB(0, 0, 150) or Color3.fromRGB(60, 60, 60)
+        elseif variableType == "punch" then
+            btn.Text = autoPunch and "🥊 PUNCH: ON" or "🥊 PUNCH: OFF"
+            btn.BackgroundColor3 = autoPunch and Color3.fromRGB(150, 0, 0) or Color3.fromRGB(60, 60, 60)
+        end
+    end
+    
+    updateButton()
+    
+    btn.MouseButton1Click:Connect(function()
+        if variableType == "train" then
+            autoTrain = not autoTrain
+            if autoTrain then
+                print("💪 Auto Train включен! (0.05сек)")
+                autoEquipDumbbell()
+            else
+                print("💪 Auto Train выключен!")
+            end
+        elseif variableType == "lock" then
+            lockPosition = not lockPosition
+            if lockPosition and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                -- Запоминаем не только позицию, но и поворот (CFrame)
+                targetCFrame = player.Character.HumanoidRootPart.CFrame
+                targetPosition = targetCFrame.Position
+                print("📍 Position & Rotation locked!")
+            elseif not lockPosition then
+                targetPosition = nil
+                targetCFrame = nil
+                print("🔓 Position & Rotation unlocked!")
+            end
+        elseif variableType == "rebirth" then
+            autoRebirth = not autoRebirth
+            if autoRebirth then
+                print("🔄 Auto Rebirth включен! (0.5сек + телепорт + тренировка + анти-игрок 120 studs)")
+                teleportToRebirthPosition()
+                autoEquipDumbbell()
+            else
+                print("🔄 Auto Rebirth выключен!")
+            end
+        elseif variableType == "punch" then
+            autoPunch = not autoPunch
+            if autoPunch then
+                print("🥊 Auto Punch включен! (0.05сек + авто-экипировка кулаков)")
+                autoEquipPunch()
+            else
+                print("🥊 Auto Punch выключен!")
+            end
+        end
+        updateButton()
+    end)
+    
+    return btn
+end
+
+-- ИНФОРМАЦИЯ О СТАТУСЕ
+local infoLabel = Instance.new("TextLabel", menuFrame)
+infoLabel.Size = UDim2.new(0.8, 0, 0, 80)
+infoLabel.Position = UDim2.new(0.1, 0, 0, 150)
+infoLabel.BackgroundTransparency = 1
+infoLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+infoLabel.Text = "💪 Auto Train + гантели\n🔒 Lock Position + поворот\n🔄 Rebirth + анти-игрок\n🥊 Auto Punch + кулаки"
+infoLabel.Font = Enum.Font.SourceSans
+infoLabel.TextSize = 12
+infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- СОЗДАЕМ ИНТЕРФЕЙС
+createMenuButton("💪 TRAIN: OFF", 15, "train")
+createMenuButton("🔒 LOCK: OFF", 60, "lock")
+createMenuButton("🔄 REBIRTH: OFF", 105, "rebirth")
+createMenuButton("🥊 PUNCH: OFF", 150, "punch")
+
+-- ОТКРЫТИЕ/ЗАКРЫТИЕ МЕНЮ
+mainBtn.MouseButton1Click:Connect(function()
+    menuFrame.Visible = not menuFrame.Visible
+    mainBtn.Text = menuFrame.Visible and "X" or "💬"
+    mainBtn.BackgroundColor3 = menuFrame.Visible and Color3.fromRGB(150, 0, 0) or Color3.fromRGB(25, 25, 25)
+end)
+
+-- ЗАПУСКАЕМ ЦИКЛЫ
+spawn(function() while wait(0.05) do autoTrainFunction() end end)
+spawn(function() while wait(0.1) do lockPlayerPosition() end end) -- УВЕЛИЧИЛ ЧАСТОТУ ДО 0.1 СЕК
+spawn(function() while wait(0.5) do if autoRebirth then callRebirth() end end end)
+spawn(function() while wait(0.8) do if autoRebirth then teleportToRebirthPosition() end end end)
+spawn(function() while wait(3) do if autoTrain or autoRebirth then autoEquipDumbbell() end end end)
+-- АВТО-ПАНЧ ЦИКЛ
+spawn(function() while wait(0.05) do autoPunchFunction() end end)
+spawn(function() while wait(3) do if autoPunch then autoEquipPunch() end end end)
+-- АНТИ-ИГРОК
+spawn(function() while wait(0.1) do if autoRebirth then instantAntiPlayerCheck() end end end)
+
+print("✅ Muscle Legends Hack загружен!")
+print("💪 Auto Train + авто-экипировка гантелей")
+print("🥊 Auto Punch + авто-экипировка кулаков")
+print("🔄 Auto Rebirth - перерождение + тренировка + телепорт")
+print("🔒 Lock Position + ПОВОРОТ - фиксирует позицию и направление взгляда")
+print("🛡️ Анти-игрок 120 studs")
