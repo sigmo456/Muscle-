@@ -1,0 +1,247 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LockAim"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local mainBtn = Instance.new("TextButton")
+mainBtn.Size = UDim2.new(0, 40, 0, 40)
+mainBtn.Position = UDim2.new(0, 10, 0, 10)
+mainBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+mainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+mainBtn.Text = "OFF"
+mainBtn.TextSize = 14
+mainBtn.Parent = screenGui
+
+-- ПЕРЕМЕННЫЕ
+local aimEnabled = false
+local teamCheck = true
+local fovAngle = 33 -- градусы поля зрения
+local currentTarget = nil
+local targetLockTime = 0
+local cameraResistance = 0.7 -- сопротивление камеры (0-1, чем больше - тем тяжелее вертеть)
+local manualTargetSwitch = false -- флаг ручной смены цели
+
+-- ОБНОВЛЕНИЕ КНОПКИ
+function updateButton()
+    if aimEnabled then
+        mainBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        mainBtn.Text = "ON"
+    else
+        mainBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        mainBtn.Text = "OFF"
+    end
+end
+
+mainBtn.MouseButton1Click:Connect(function()
+    aimEnabled = not aimEnabled
+    if not aimEnabled then
+        currentTarget = nil -- Сбрасываем цель при выключении
+        manualTargetSwitch = false
+    end
+    updateButton()
+end)
+
+-- ОТСЛЕЖИВАНИЕ ДВИЖЕНИЯ КАМЕРЫ
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        -- Если сильно двигаем камеру - разрешаем смену цели
+        if aimEnabled and currentTarget then
+            local currentDirection = camera.CFrame.LookVector
+            local targetDirection = (currentTarget.Position - camera.CFrame.Position).Unit
+            local angleToTarget = math.deg(math.acos(currentDirection:Dot(targetDirection)))
+            
+            -- Если угол до цели больше 45 градусов - разрешаем смену
+            if angleToTarget > 45 then
+                manualTargetSwitch = true
+            end
+        end
+    end
+end)
+
+-- ПРОВЕРКА КОМАНДЫ
+function isEnemy(targetPlayer)
+    if not teamCheck then return true end
+    if targetPlayer == player then return false end
+    
+    if player.Team and targetPlayer.Team then
+        return player.Team ~= targetPlayer.Team
+    end
+    
+    if player.TeamColor and targetPlayer.TeamColor then
+        return player.TeamColor ~= targetPlayer.TeamColor
+    end
+    
+    return true
+end
+
+-- ПРОВЕРКА НАХОЖДЕНИЯ В ПОЛЕ ЗРЕНИЯ
+function isInFOV(targetHead)
+    local camera = Workspace.CurrentCamera
+    local cameraCFrame = camera.CFrame
+    local cameraLookVector = cameraCFrame.LookVector
+    
+    local directionToTarget = (targetHead.Position - cameraCFrame.Position).Unit
+    local dotProduct = cameraLookVector:Dot(directionToTarget)
+    local angle = math.deg(math.acos(dotProduct))
+    
+    return angle <= fovAngle
+end
+
+-- ПОИСК ЛУЧШЕЙ ЦЕЛИ
+function findBestTarget()
+    if not player.Character then return nil end
+    
+    local character = player.Character
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local head = character:FindFirstChild("Head")
+    
+    if not humanoid or humanoid.Health <= 0 or not head then return nil end
+    
+    local bestTarget = nil
+    local bestScore = -math.huge
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and isEnemy(otherPlayer) and otherPlayer.Character then
+            local targetChar = otherPlayer.Character
+            local targetHumanoid = targetChar:FindFirstChildOfClass("Humanoid")
+            local targetHead = targetChar:FindFirstChild("Head")
+            
+            if targetHumanoid and targetHumanoid.Health > 0 and targetHead then
+                local distance = (head.Position - targetHead.Position).Magnitude
+                
+                -- Raycast проверка видимости
+                local raycastParams = RaycastParams.new()
+                raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+                raycastParams.FilterDescendantsInstances = {character}
+                
+                local rayOrigin = camera.CFrame.Position
+                local rayDirection = (targetHead.Position - rayOrigin).Unit
+                local rayDistance = (targetHead.Position - rayOrigin).Magnitude
+                
+                local raycastResult = Workspace:Raycast(rayOrigin, rayDirection * rayDistance, raycastParams)
+                
+                if not raycastResult or raycastResult.Instance:IsDescendantOf(targetChar) then
+                    local distanceScore = 1000 / math.max(distance, 1)
+                    local fovBonus = isInFOV(targetHead) and 1000 or 0
+                    local currentTargetBonus = (targetHead == currentTarget) and 2000 or 0
+                    
+                    local totalScore = distanceScore + fovBonus + currentTargetBonus
+                    
+                    if totalScore > bestScore then
+                        bestScore = totalScore
+                        bestTarget = targetHead
+                    end
+                end
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
+-- ПРОВЕРКА СМЕНЫ ЦЕЛИ
+function shouldSwitchTarget(newTarget)
+    if not currentTarget then 
+        manualTargetSwitch = false
+        return true 
+    end
+    
+    -- Если текущая цель мертва или пропала
+    if not currentTarget.Parent or not currentTarget.Parent:FindFirstChildOfClass("Humanoid") or currentTarget.Parent:FindFirstChildOfClass("Humanoid").Health <= 0 then
+        manualTargetSwitch = false
+        return true
+    end
+    
+    -- Если разрешена ручная смена цели
+    if manualTargetSwitch and newTarget and newTarget ~= currentTarget then
+        manualTargetSwitch = false
+        return true
+    end
+    
+    -- Только если новая цель ОЧЕНЬ сильно лучше (в 5 раз лучше по счету)
+    local currentScore = calculateTargetScore(currentTarget)
+    local newScore = calculateTargetScore(newTarget)
+    
+    if newScore > currentScore * 5 then
+        manualTargetSwitch = false
+        return true
+    end
+    
+    return false
+end
+
+-- ВЫЧИСЛЕНИЕ СЧЕТА ЦЕЛИ
+function calculateTargetScore(targetHead)
+    if not targetHead then return 0 end
+    
+    local character = player.Character
+    local head = character:FindFirstChild("Head")
+    if not head then return 0 end
+    
+    local distance = (head.Position - targetHead.Position).Magnitude
+    local distanceScore = 1000 / math.max(distance, 1)
+    local fovBonus = isInFOV(targetHead) and 1000 or 0
+    
+    return distanceScore + fovBonus
+end
+
+-- НАВЕДЕНИЕ КАМЕРЫ С СОПРОТИВЛЕНИЕМ
+RunService.Heartbeat:Connect(function()
+    if aimEnabled and player.Character then
+        local newTarget = findBestTarget()
+        
+        -- Решаем, нужно ли сменить цель
+        if shouldSwitchTarget(newTarget) then
+            currentTarget = newTarget
+            if currentTarget then
+                targetLockTime = tick()
+                print("🎯 ЗАФИКСИРОВАНА ЦЕЛЬ: " .. currentTarget.Parent.Name)
+            end
+        end
+        
+        if currentTarget then
+            local currentPosition = camera.CFrame.Position
+            
+            -- Вычисляем направление к цели
+            local targetDirection = (currentTarget.Position - currentPosition).Unit
+            local currentDirection = camera.CFrame.LookVector
+            
+            -- Смешиваем направления с сопротивлением
+            local blendedDirection = currentDirection:Lerp(targetDirection, cameraResistance)
+            
+            -- Применяем новое направление камеры
+            camera.CFrame = CFrame.lookAt(currentPosition, currentPosition + blendedDirection)
+        end
+    else
+        currentTarget = nil
+        manualTargetSwitch = false
+    end
+end)
+
+-- ИНФОРМАЦИЯ О ЦЕЛИ
+RunService.Heartbeat:Connect(function()
+    if aimEnabled and player.Character and currentTarget then
+        local inFOV = isInFOV(currentTarget)
+        local distance = (player.Character.Head.Position - currentTarget.Position).Magnitude
+        local lockDuration = tick() - targetLockTime
+        local fovStatus = inFOV and "🎯 В ПРИЦЕЛЕ" or "👁️ ВНЕ ПРИЦЕЛА"
+        
+        print(string.format("%s | %s | Дистанция: %d | Фиксация: %.1fс", 
+              fovStatus, currentTarget.Parent.Name, math.floor(distance), lockDuration))
+    end
+end)
+
+print("🎯 LOCK AIM ЗАГРУЖЕН!")
+print("✅ Фиксация на выбранной цели")
+print("✅ НЕТ автоматических переключений по времени")
+print("✅ Смена цели только при ручном повороте камеры >45°")
+print("✅ Сопротивление камеры: " .. math.floor(cameraResistance * 100) .. "%")
